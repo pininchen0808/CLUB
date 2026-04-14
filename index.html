@@ -1,528 +1,566 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { 
-  Play, Pause, Plus, Music, Users, Folder, Settings, 
-  MapPin, Clock, Trash2, Edit3, Volume2, AlignJustify, Upload,
-  ChevronRight, Activity
-} from 'lucide-react';
-
-// --- 工具函數 ---
-const generateId = () => Math.random().toString(36).substr(2, 9);
-const formatTime = (seconds) => {
-  if (!seconds || isNaN(seconds)) return "00:00";
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-};
-
-// 預設舞者顏色
-const DANCER_COLORS = [
-  'bg-red-500', 'bg-blue-500', 'bg-green-500', 'bg-yellow-500', 
-  'bg-purple-500', 'bg-pink-500', 'bg-indigo-500', 'bg-teal-500',
-  'bg-orange-500', 'bg-cyan-500'
-];
-
-// --- 主要元件 ---
-export default function App() {
-  // --- 狀態管理 ---
-  const [projects, setProjects] = useState([]);
-  const [currentProjectId, setCurrentProjectId] = useState(null);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [duration, setDuration] = useState(0);
-  const audioRef = useRef(null);
-  const stageRef = useRef(null);
-
-  // 取得當前專案
-  const project = projects.find(p => p.id === currentProjectId);
-
-  // 初始化預設專案
-  useEffect(() => {
-    if (projects.length === 0) {
-      const defaultProject = createNewProject("我的第一支舞");
-      setProjects([defaultProject]);
-      setCurrentProjectId(defaultProject.id);
-    }
-  }, []);
-
-  // 處理音檔時間更新
-  const handleTimeUpdate = () => {
-    if (audioRef.current) {
-      setCurrentTime(audioRef.current.currentTime);
-    }
-  };
-
-  const handleAudioLoaded = () => {
-    if (audioRef.current) {
-      setDuration(audioRef.current.duration);
-    }
-  };
-
-  const togglePlay = () => {
-    if (!audioRef.current || !project?.audioUrl) {
-      alert("請先上傳音樂檔案！");
-      return;
-    }
-    if (isPlaying) {
-      audioRef.current.pause();
-    } else {
-      audioRef.current.play();
-    }
-    setIsPlaying(!isPlaying);
-  };
-
-  const createNewProject = (name) => {
-    return {
-      id: generateId(),
-      name: name || `未命名專案 ${projects.length + 1}`,
-      dancerCount: 5,
-      audioUrl: null,
-      bpm: 120,
-      duration: 180, // 預設 3 分鐘，載入音檔後會更新
-      formations: [
-        { id: generateId(), time: 0, positions: generateDefaultPositions(5) }
-      ],
-      sections: []
-    };
-  };
-
-  const generateDefaultPositions = (count) => {
-    const positions = {};
-    for (let i = 0; i < count; i++) {
-      // 預設排成一列在中間
-      positions[i] = { 
-        x: 50 + (i - Math.floor(count / 2)) * 10, 
-        y: 50 
-      };
-    }
-    return positions;
-  };
-
-  const handleAddProject = () => {
-    const name = prompt("請輸入新專案名稱：");
-    if (name) {
-      const newProj = createNewProject(name);
-      setProjects([...projects, newProj]);
-      setCurrentProjectId(newProj.id);
-      setCurrentTime(0);
-      setIsPlaying(false);
-      setDuration(newProj.duration);
-    }
-  };
-
-  const updateProject = (updates) => {
-    setProjects(projects.map(p => p.id === currentProjectId ? { ...p, ...updates } : p));
-  };
-
-  // --- 拖曳與隊形邏輯 ---
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ChoreoFlow 走位大師</title>
   
-  // 找出目前時間點適用的隊形 (最接近且小於等於目前時間的關鍵幀)
-  const getCurrentFormation = () => {
-    if (!project) return null;
-    const sorted = [...project.formations].sort((a, b) => a.time - b.time);
-    let active = sorted[0];
-    for (let f of sorted) {
-      if (f.time <= currentTime) {
-        active = f;
-      } else {
-        break;
-      }
-    }
-    return active;
-  };
+  <!-- 載入 Tailwind CSS (排版與顏色) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- 載入 FontAwesome Icon (圖示) -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
-  const activeFormation = getCurrentFormation();
+  <!-- 載入 React 與 ReactDOM -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  
+  <!-- 載入 Babel (讓瀏覽器能即時看懂 JSX 語法) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-neutral-900 text-white">
+  
+  <!-- React 會把畫面渲染到這裡 -->
+  <div id="root"></div>
 
-  const handleDancerDragStart = (dancerId, e) => {
-    if (!stageRef.current || !activeFormation) return;
-    
-    // 停止事件冒泡
-    e.stopPropagation();
+  <!-- 主要程式碼區塊 -->
+  <script type="text/babel">
+    const { useState, useRef, useEffect, useCallback } = React;
 
-    // 如果目前時間沒有關鍵幀，自動建立一個
-    let targetFormation = activeFormation;
-    // 容許 0.5 秒的誤差視為同一個關鍵幀
-    if (Math.abs(targetFormation.time - currentTime) > 0.5) {
-        targetFormation = {
+    // --- 工具函數 ---
+    const generateId = () => Math.random().toString(36).substr(2, 9);
+    const formatTime = (seconds) => {
+      if (!seconds || isNaN(seconds)) return "00:00";
+      const m = Math.floor(seconds / 60);
+      const s = Math.floor(seconds % 60);
+      return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    };
+
+    // 預設舞者顏色
+    const DANCER_COLORS = [
+      'bg-red-500', 'bg-blue-500', 'bg-green-500', 'bg-yellow-500', 
+      'bg-purple-500', 'bg-pink-500', 'bg-indigo-500', 'bg-teal-500',
+      'bg-orange-500', 'bg-cyan-500'
+    ];
+
+    const LOCAL_STORAGE_KEY = 'choreoflow_projects_v1';
+    const LOCAL_STORAGE_ID_KEY = 'choreoflow_current_id';
+
+    // --- 主要元件 ---
+    function App() {
+      // --- 狀態管理 (加入 LocalStorage 讀取) ---
+      const [projects, setProjects] = useState(() => {
+        try {
+          const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            return parsed.map(p => ({
+              ...p,
+              audioUrl: p.audioUrl?.startsWith('blob:') ? null : p.audioUrl
+            }));
+          }
+        } catch (e) {
+          console.error("載入存檔失敗:", e);
+        }
+        return [];
+      });
+
+      const [currentProjectId, setCurrentProjectId] = useState(() => {
+        return localStorage.getItem(LOCAL_STORAGE_ID_KEY) || null;
+      });
+
+      const [currentTime, setCurrentTime] = useState(0);
+      const [isPlaying, setIsPlaying] = useState(false);
+      const [duration, setDuration] = useState(0);
+      const [snapToGrid, setSnapToGrid] = useState(true);
+      const audioRef = useRef(null);
+      const stageRef = useRef(null);
+
+      // 取得當前專案
+      const project = projects.find(p => p.id === currentProjectId);
+
+      // 初始化預設專案
+      useEffect(() => {
+        if (projects.length === 0) {
+          const defaultProject = createNewProject("我的第一支舞");
+          setProjects([defaultProject]);
+          setCurrentProjectId(defaultProject.id);
+        }
+      }, [projects]);
+
+      // 自動存檔機制
+      useEffect(() => {
+        if (projects.length > 0) {
+          localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(projects));
+          if (currentProjectId) {
+            localStorage.setItem(LOCAL_STORAGE_ID_KEY, currentProjectId);
+          }
+        }
+      }, [projects, currentProjectId]);
+
+      // 匯出功能
+      const handleExport = () => {
+        const dataStr = JSON.stringify(projects, null, 2);
+        const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr);
+        const exportFileDefaultName = `ChoreoFlow_Backup_${new Date().toISOString().split('T')[0]}.json`;
+        
+        const linkElement = document.createElement('a');
+        linkElement.setAttribute('href', dataUri);
+        linkElement.setAttribute('download', exportFileDefaultName);
+        linkElement.click();
+      };
+
+      // 匯入功能
+      const handleImport = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          try {
+            const importedProjects = JSON.parse(event.target.result);
+            if (Array.isArray(importedProjects)) {
+              const sanitized = importedProjects.map(p => ({
+                ...p,
+                audioUrl: p.audioUrl?.startsWith('blob:') ? null : p.audioUrl
+              }));
+              setProjects(sanitized);
+              setCurrentProjectId(sanitized[0]?.id || null);
+              alert('匯入成功！請重新點擊「上傳音樂」載入音檔。');
+            } else {
+              alert('檔案格式錯誤');
+            }
+          } catch (err) {
+            alert('讀取檔案失敗');
+          }
+        };
+        reader.readAsText(file);
+        e.target.value = null;
+      };
+
+      const handleTimeUpdate = () => {
+        if (audioRef.current) {
+          setCurrentTime(audioRef.current.currentTime);
+        }
+      };
+
+      const handleAudioLoaded = () => {
+        if (audioRef.current) {
+          setDuration(audioRef.current.duration);
+        }
+      };
+
+      const togglePlay = () => {
+        if (!audioRef.current || !project?.audioUrl) {
+          alert("請先上傳音樂檔案！");
+          return;
+        }
+        if (isPlaying) {
+          audioRef.current.pause();
+        } else {
+          audioRef.current.play();
+        }
+        setIsPlaying(!isPlaying);
+      };
+
+      const createNewProject = (name) => {
+        return {
+          id: generateId(),
+          name: name || `未命名專案 ${projects.length + 1}`,
+          dancerCount: 5,
+          audioUrl: null,
+          bpm: 120,
+          duration: 180,
+          formations: [
+            { id: generateId(), time: 0, positions: generateDefaultPositions(5) }
+          ],
+          sections: []
+        };
+      };
+
+      const generateDefaultPositions = (count) => {
+        const positions = {};
+        for (let i = 0; i < count; i++) {
+          positions[i] = { 
+            x: 50 + (i - Math.floor(count / 2)) * 10, 
+            y: 50 
+          };
+        }
+        return positions;
+      };
+
+      const handleAddProject = () => {
+        const name = prompt("請輸入新專案名稱：");
+        if (name) {
+          const newProj = createNewProject(name);
+          setProjects([...projects, newProj]);
+          setCurrentProjectId(newProj.id);
+          setCurrentTime(0);
+          setIsPlaying(false);
+          setDuration(newProj.duration);
+        }
+      };
+
+      const updateProject = (updates) => {
+        setProjects(projects.map(p => p.id === currentProjectId ? { ...p, ...updates } : p));
+      };
+
+      const getCurrentFormation = () => {
+        if (!project) return null;
+        const sorted = [...project.formations].sort((a, b) => a.time - b.time);
+        let active = sorted[0];
+        for (let f of sorted) {
+          if (f.time <= currentTime) {
+            active = f;
+          } else {
+            break;
+          }
+        }
+        return active;
+      };
+
+      const activeFormation = getCurrentFormation();
+
+      const handleDancerDragStart = (dancerId, e) => {
+        if (!stageRef.current || !activeFormation) return;
+        
+        e.stopPropagation();
+
+        let targetFormation = activeFormation;
+        if (Math.abs(targetFormation.time - currentTime) > 0.5) {
+            targetFormation = {
+                id: generateId(),
+                time: currentTime,
+                positions: { ...activeFormation.positions }
+            };
+            updateProject({ formations: [...project.formations, targetFormation] });
+        }
+
+        const stageRect = stageRef.current.getBoundingClientRect();
+        
+        const onPointerMove = (moveEvent) => {
+          let newX = ((moveEvent.clientX - stageRect.left) / stageRect.width) * 100;
+          let newY = ((moveEvent.clientY - stageRect.top) / stageRect.height) * 100;
+          
+          if (snapToGrid) {
+            const snapSize = 5;
+            newX = Math.round(newX / snapSize) * snapSize;
+            newY = Math.round(newY / snapSize) * snapSize;
+          }
+
+          newX = Math.max(0, Math.min(100, newX));
+          newY = Math.max(0, Math.min(100, newY));
+
+          const updatedFormations = project.formations.map(f => {
+            if (f.id === targetFormation.id) {
+              return {
+                ...f,
+                positions: {
+                  ...f.positions,
+                  [dancerId]: { x: newX, y: newY }
+                }
+              };
+            }
+            return f;
+          });
+          
+          updateProject({ formations: updatedFormations });
+        };
+
+        const onPointerUp = () => {
+          document.removeEventListener('pointermove', onPointerMove);
+          document.removeEventListener('pointerup', onPointerUp);
+        };
+
+        document.addEventListener('pointermove', onPointerMove);
+        document.addEventListener('pointerup', onPointerUp);
+      };
+
+      const handleFileUpload = (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          const url = URL.createObjectURL(file);
+          updateProject({ audioUrl: url });
+          setCurrentTime(0);
+          if (audioRef.current) {
+            audioRef.current.load();
+          }
+        }
+      };
+
+      const handleTimelineClick = (e) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const percentage = x / rect.width;
+        const newTime = percentage * duration;
+        
+        setCurrentTime(newTime);
+        if (audioRef.current) {
+          audioRef.current.currentTime = newTime;
+        }
+      };
+
+      const addKeyframe = () => {
+        if (!project || !activeFormation) return;
+        const exists = project.formations.some(f => Math.abs(f.time - currentTime) < 0.5);
+        if (!exists) {
+          const newFormation = {
             id: generateId(),
             time: currentTime,
             positions: { ...activeFormation.positions }
-        };
-        updateProject({ formations: [...project.formations, targetFormation] });
-    }
-
-    const stageRect = stageRef.current.getBoundingClientRect();
-    
-    const onPointerMove = (moveEvent) => {
-      let newX = ((moveEvent.clientX - stageRect.left) / stageRect.width) * 100;
-      let newY = ((moveEvent.clientY - stageRect.top) / stageRect.height) * 100;
-      
-      // 限制在舞台內
-      newX = Math.max(0, Math.min(100, newX));
-      newY = Math.max(0, Math.min(100, newY));
-
-      const updatedFormations = project.formations.map(f => {
-        if (f.id === targetFormation.id) {
-          return {
-            ...f,
-            positions: {
-              ...f.positions,
-              [dancerId]: { x: newX, y: newY }
-            }
           };
+          updateProject({ formations: [...project.formations, newFormation] });
         }
-        return f;
-      });
-      
-      updateProject({ formations: updatedFormations });
-    };
-
-    const onPointerUp = () => {
-      document.removeEventListener('pointermove', onPointerMove);
-      document.removeEventListener('pointerup', onPointerUp);
-    };
-
-    document.addEventListener('pointermove', onPointerMove);
-    document.addEventListener('pointerup', onPointerUp);
-  };
-
-  // --- 音檔與時間軸操作 ---
-  const handleFileUpload = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      const url = URL.createObjectURL(file);
-      updateProject({ audioUrl: url });
-      // 重置時間
-      setCurrentTime(0);
-      if (audioRef.current) {
-        audioRef.current.load();
-      }
-    }
-  };
-
-  const handleTimelineClick = (e) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const percentage = x / rect.width;
-    const newTime = percentage * duration;
-    
-    setCurrentTime(newTime);
-    if (audioRef.current) {
-      audioRef.current.currentTime = newTime;
-    }
-  };
-
-  const addKeyframe = () => {
-    if (!project || !activeFormation) return;
-    // 檢查是否已存在
-    const exists = project.formations.some(f => Math.abs(f.time - currentTime) < 0.5);
-    if (!exists) {
-      const newFormation = {
-        id: generateId(),
-        time: currentTime,
-        positions: { ...activeFormation.positions }
       };
-      updateProject({ formations: [...project.formations, newFormation] });
-    }
-  };
 
-  const deleteKeyframe = (id) => {
-    if (project.formations.length <= 1) {
-      alert("至少需要保留一個隊形！");
-      return;
-    }
-    updateProject({ formations: project.formations.filter(f => f.id !== id) });
-  };
-
-  const addSection = () => {
-    const name = prompt("段落名稱 (例如：Intro, Chorus)：", "Chorus");
-    if (name) {
-      const newSection = {
-        id: generateId(),
-        name,
-        time: currentTime,
-        color: ['bg-red-400', 'bg-blue-400', 'bg-green-400', 'bg-purple-400'][project.sections.length % 4]
+      const deleteKeyframe = (id) => {
+        if (project.formations.length <= 1) {
+          alert("至少需要保留一個隊形！");
+          return;
+        }
+        updateProject({ formations: project.formations.filter(f => f.id !== id) });
       };
-      updateProject({ sections: [...project.sections, newSection].sort((a,b) => a.time - b.time) });
-    }
-  };
 
-  if (!project) return <div className="min-h-screen bg-neutral-900 text-white flex items-center justify-center">載入中...</div>;
+      const addSection = () => {
+        const name = prompt("段落名稱 (例如：Intro, Chorus)：", "Chorus");
+        if (name) {
+          const newSection = {
+            id: generateId(),
+            name,
+            time: currentTime,
+            color: ['bg-red-400', 'bg-blue-400', 'bg-green-400', 'bg-purple-400'][project.sections.length % 4]
+          };
+          updateProject({ sections: [...project.sections, newSection].sort((a,b) => a.time - b.time) });
+        }
+      };
 
-  return (
-    <div className="min-h-screen bg-neutral-900 text-neutral-100 flex font-sans overflow-hidden">
-      
-      {/* 隱藏的 Audio 元件 */}
-      {project.audioUrl && (
-        <audio 
-          ref={audioRef} 
-          src={project.audioUrl} 
-          onTimeUpdate={handleTimeUpdate}
-          onLoadedMetadata={handleAudioLoaded}
-          onEnded={() => setIsPlaying(false)}
-        />
-      )}
+      if (!project) return <div className="min-h-screen bg-neutral-900 text-white flex items-center justify-center">載入中...</div>;
 
-      {/* 左側邊欄：專案列表 */}
-      <div className="w-64 bg-neutral-950 border-r border-neutral-800 flex flex-col">
-        <div className="p-4 border-b border-neutral-800 flex items-center justify-between">
-          <h1 className="text-xl font-bold bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent flex items-center gap-2">
-            <Activity className="w-6 h-6 text-purple-500" />
-            走位大師
-          </h1>
-        </div>
-        <div className="flex-1 overflow-y-auto p-4 space-y-2">
-          <div className="text-xs text-neutral-500 font-semibold mb-2 uppercase tracking-wider">表演專案</div>
-          {projects.map(p => (
-            <button
-              key={p.id}
-              onClick={() => setCurrentProjectId(p.id)}
-              className={`w-full text-left px-3 py-2 rounded-lg flex items-center gap-3 transition-colors ${
-                currentProjectId === p.id ? 'bg-purple-600/20 text-purple-400 border border-purple-500/30' : 'hover:bg-neutral-800 text-neutral-400'
-              }`}
-            >
-              <Folder className="w-4 h-4" />
-              <span className="truncate">{p.name}</span>
-            </button>
-          ))}
-          <button 
-            onClick={handleAddProject}
-            className="w-full mt-4 px-3 py-2 rounded-lg border border-dashed border-neutral-700 text-neutral-400 hover:text-white hover:border-neutral-500 flex items-center justify-center gap-2 transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            新增專案
-          </button>
-        </div>
-      </div>
-
-      {/* 右側主要工作區 */}
-      <div className="flex-1 flex flex-col h-screen overflow-hidden">
-        
-        {/* 頂部工具列 */}
-        <header className="h-16 bg-neutral-900 border-b border-neutral-800 flex items-center px-6 justify-between shrink-0">
-          <div className="flex items-center gap-4">
-            <h2 className="text-lg font-medium flex items-center gap-2">
-              {project.name}
-              <button onClick={() => {
-                const newName = prompt("重新命名專案：", project.name);
-                if(newName) updateProject({name: newName});
-              }} className="text-neutral-500 hover:text-white transition"><Edit3 className="w-4 h-4"/></button>
-            </h2>
-          </div>
+      return (
+        <div className="min-h-screen bg-neutral-900 text-neutral-100 flex font-sans overflow-hidden">
           
-          <div className="flex items-center gap-6">
-            {/* 舞者人數設定 */}
-            <div className="flex items-center gap-2 text-sm bg-neutral-800 px-3 py-1.5 rounded-full border border-neutral-700">
-              <Users className="w-4 h-4 text-neutral-400" />
-              <span className="text-neutral-300">舞者人數:</span>
-              <input 
-                type="number" 
-                min="1" max="50"
-                value={project.dancerCount}
-                onChange={(e) => {
-                  const count = parseInt(e.target.value) || 1;
-                  const newPositions = generateDefaultPositions(count);
-                  // 將新的預設位置合併到所有關鍵幀 (簡化處理)
-                  const updatedFormations = project.formations.map(f => ({
-                    ...f,
-                    positions: { ...newPositions, ...f.positions } // 保留舊的，加入新的
-                  }));
-                  updateProject({ dancerCount: count, formations: updatedFormations });
-                }}
-                className="w-12 bg-transparent text-white focus:outline-none text-center"
-              />
+          {project.audioUrl && (
+            <audio 
+              ref={audioRef} 
+              src={project.audioUrl} 
+              onTimeUpdate={handleTimeUpdate}
+              onLoadedMetadata={handleAudioLoaded}
+              onEnded={() => setIsPlaying(false)}
+            />
+          )}
+
+          {/* 左側邊欄 */}
+          <div className="w-64 bg-neutral-950 border-r border-neutral-800 flex flex-col">
+            <div className="p-4 border-b border-neutral-800 flex items-center justify-between">
+              <h1 className="text-xl font-bold bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent flex items-center gap-2">
+                <i className="fas fa-wave-square text-purple-500"></i>
+                走位大師
+              </h1>
             </div>
-
-            {/* 音檔上傳 */}
-            <label className="flex items-center gap-2 text-sm bg-purple-600 hover:bg-purple-500 text-white px-4 py-1.5 rounded-full cursor-pointer transition-colors shadow-lg shadow-purple-500/20">
-              <Upload className="w-4 h-4" />
-              <span>{project.audioUrl ? "重新上傳音樂" : "上傳音樂"}</span>
-              <input type="file" accept="audio/*" className="hidden" onChange={handleFileUpload} />
-            </label>
-          </div>
-        </header>
-
-        {/* 舞台區域 */}
-        <main className="flex-1 relative bg-neutral-950 p-6 flex flex-col">
-           {/* 舞台邊框 */}
-           <div 
-             ref={stageRef}
-             className="flex-1 w-full max-w-5xl mx-auto border-2 border-neutral-800 rounded-2xl bg-neutral-900 relative shadow-2xl overflow-hidden"
-             style={{ 
-               backgroundImage: 'linear-gradient(to right, #2a2a2a 1px, transparent 1px), linear-gradient(to bottom, #2a2a2a 1px, transparent 1px)',
-               backgroundSize: '5% 5%' // 網格背景幫助對齊
-             }}
-           >
-             {/* 舞台中心點標示 */}
-             <div className="absolute top-1/2 left-1/2 w-4 h-4 -translate-x-1/2 -translate-y-1/2 border-2 border-red-500/30 rounded-full"></div>
-             <div className="absolute top-0 bottom-0 left-1/2 w-px bg-red-500/20"></div>
-             <div className="absolute left-0 right-0 top-1/2 h-px bg-red-500/20"></div>
-
-             {/* 前台標示 */}
-             <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-neutral-600 font-bold tracking-[0.5em] uppercase text-sm">
-               Front
-             </div>
-
-             {/* 渲染舞者 */}
-             {activeFormation && Array.from({ length: project.dancerCount }).map((_, i) => {
-               const pos = activeFormation.positions[i] || { x: 50, y: 50 };
-               return (
-                 <div
-                   key={i}
-                   onPointerDown={(e) => handleDancerDragStart(i, e)}
-                   className={`absolute w-10 h-10 -ml-5 -mt-5 rounded-full shadow-lg border-2 border-white/20 flex items-center justify-center font-bold cursor-grab active:cursor-grabbing hover:scale-110 transition-transform ${DANCER_COLORS[i % DANCER_COLORS.length]}`}
-                   style={{ 
-                     left: `${pos.x}%`, 
-                     top: `${pos.y}%`,
-                     transition: isPlaying ? 'left 0.1s linear, top 0.1s linear' : 'none' // 播放時平滑移動
-                   }}
-                 >
-                   {i + 1}
-                 </div>
-               );
-             })}
-           </div>
-        </main>
-
-        {/* 底部時間軸控制區 */}
-        <footer className="h-64 bg-neutral-900 border-t border-neutral-800 flex flex-col shrink-0">
-          
-          {/* 控制列 */}
-          <div className="flex items-center justify-between px-6 py-3 border-b border-neutral-800">
-            <div className="flex items-center gap-4">
-              <button 
-                onClick={togglePlay}
-                className="w-12 h-12 bg-white text-black rounded-full flex items-center justify-center hover:scale-105 transition-transform shadow-lg shadow-white/10"
-              >
-                {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6 ml-1" />}
-              </button>
-              <div className="text-2xl font-mono tracking-wider font-light text-purple-400 w-24">
-                {formatTime(currentTime)}
+            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-xs text-neutral-500 font-semibold uppercase tracking-wider">表演專案</span>
+                <span className="text-[10px] text-green-500 flex items-center gap-1 opacity-70">
+                  <i className="fas fa-save"></i> 已儲存
+                </span>
               </div>
-              <div className="text-neutral-500 text-sm">
-                / {formatTime(duration)}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 bg-neutral-800 px-3 py-1.5 rounded-lg text-sm border border-neutral-700">
-                <Activity className="w-4 h-4 text-neutral-400" />
-                <span className="text-neutral-400">BPM:</span>
-                <input 
-                  type="number" 
-                  value={project.bpm} 
-                  onChange={e => updateProject({bpm: parseInt(e.target.value) || 120})}
-                  className="w-12 bg-transparent text-white focus:outline-none"
-                />
-              </div>
+              {projects.map(p => (
+                <button
+                  key={p.id}
+                  onClick={() => setCurrentProjectId(p.id)}
+                  className={`w-full text-left px-3 py-2 rounded-lg flex items-center gap-3 transition-colors ${
+                    currentProjectId === p.id ? 'bg-purple-600/20 text-purple-400 border border-purple-500/30' : 'hover:bg-neutral-800 text-neutral-400'
+                  }`}
+                >
+                  <i className="fas fa-folder text-sm w-4 text-center"></i>
+                  <span className="truncate">{p.name}</span>
+                </button>
+              ))}
               <button 
-                onClick={addSection}
-                className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 rounded-lg text-sm flex items-center gap-2 transition-colors border border-neutral-700"
+                onClick={handleAddProject}
+                className="w-full mt-4 px-3 py-2 rounded-lg border border-dashed border-neutral-700 text-neutral-400 hover:text-white hover:border-neutral-500 flex items-center justify-center gap-2 transition-colors"
               >
-                <AlignJustify className="w-4 h-4" />
-                標記段落
+                <i className="fas fa-plus"></i>
+                新增專案
               </button>
-              <button 
-                onClick={addKeyframe}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm flex items-center gap-2 transition-colors shadow-lg shadow-indigo-500/20"
-              >
-                <MapPin className="w-4 h-4" />
-                記錄隊形 (Keyframe)
-              </button>
+              
+              <div className="my-4 border-t border-neutral-800 pt-4 space-y-2">
+                <button 
+                  onClick={handleExport}
+                  className="w-full px-3 py-2 rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 hover:text-white flex items-center gap-2 transition-colors text-sm"
+                >
+                  <i className="fas fa-download w-4 text-center"></i>
+                  匯出備份
+                </button>
+                <label className="w-full px-3 py-2 rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 hover:text-white flex items-center gap-2 transition-colors text-sm cursor-pointer">
+                  <i className="fas fa-cloud-upload-alt w-4 text-center"></i>
+                  <span>匯入檔案</span>
+                  <input type="file" accept=".json" className="hidden" onChange={handleImport} />
+                </label>
+              </div>
             </div>
           </div>
 
-          {/* 時間軸本體 */}
-          <div className="flex-1 relative px-6 py-4 flex flex-col select-none overflow-hidden">
+          {/* 右側主要工作區 */}
+          <div className="flex-1 flex flex-col h-screen overflow-hidden">
             
-            {/* 段落標籤區 (Sections) */}
-            <div className="h-6 relative mb-2">
-              {project.sections.map((sec, idx) => {
-                const nextSec = project.sections[idx + 1];
-                const endTime = nextSec ? nextSec.time : duration;
-                const left = (sec.time / (duration || 1)) * 100;
-                const width = ((endTime - sec.time) / (duration || 1)) * 100;
-                
-                return (
-                  <div 
-                    key={sec.id} 
-                    className={`absolute top-0 h-full ${sec.color} rounded-sm px-2 flex items-center text-xs font-bold text-black/80 truncate border border-black/20`}
-                    style={{ left: `${left}%`, width: `${width}%` }}
-                  >
-                    {sec.name}
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); updateProject({ sections: project.sections.filter(s => s.id !== sec.id) }); }}
-                      className="ml-auto opacity-50 hover:opacity-100"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
+            <header className="h-16 bg-neutral-900 border-b border-neutral-800 flex items-center px-6 justify-between shrink-0">
+              <div className="flex items-center gap-4">
+                <h2 className="text-lg font-medium flex items-center gap-2">
+                  {project.name}
+                  <button onClick={() => {
+                    const newName = prompt("重新命名專案：", project.name);
+                    if(newName) updateProject({name: newName});
+                  }} className="text-neutral-500 hover:text-white transition"><i className="fas fa-pen text-sm"></i></button>
+                </h2>
+              </div>
+              
+              <div className="flex items-center gap-6">
+                <div className="flex items-center gap-2 text-sm bg-neutral-800 px-3 py-1.5 rounded-full border border-neutral-700">
+                  <i className="fas fa-users text-neutral-400"></i>
+                  <span className="text-neutral-300">舞者人數:</span>
+                  <input 
+                    type="number" min="1" max="50" value={project.dancerCount}
+                    onChange={(e) => {
+                      const count = parseInt(e.target.value) || 1;
+                      const newPositions = generateDefaultPositions(count);
+                      const updatedFormations = project.formations.map(f => ({
+                        ...f, positions: { ...newPositions, ...f.positions }
+                      }));
+                      updateProject({ dancerCount: count, formations: updatedFormations });
+                    }}
+                    className="w-12 bg-transparent text-white focus:outline-none text-center"
+                  />
+                </div>
 
-            {/* 音軌與關鍵幀區 */}
-            <div 
-              className="flex-1 bg-neutral-950 rounded-xl relative cursor-pointer group border border-neutral-800 overflow-hidden"
-              onClick={handleTimelineClick}
-            >
-              {/* 背景網格 (模擬波形或軌道) */}
-              <div className="absolute inset-0 opacity-20" 
-                   style={{
-                     backgroundImage: 'linear-gradient(90deg, #333 1px, transparent 1px)',
-                     backgroundSize: '20px 100%'
-                   }}>
+                <button
+                  onClick={() => setSnapToGrid(!snapToGrid)}
+                  className={`flex items-center gap-2 text-sm px-3 py-1.5 rounded-full border transition-colors ${
+                    snapToGrid ? 'bg-purple-600/20 text-purple-400 border-purple-500/50' : 'bg-neutral-800 text-neutral-400 border-neutral-700 hover:text-white'
+                  }`}
+                >
+                  <i className="fas fa-border-all"></i>
+                  <span>{snapToGrid ? "對齊網格" : "自由移動"}</span>
+                </button>
+
+                <label className="flex items-center gap-2 text-sm bg-purple-600 hover:bg-purple-500 text-white px-4 py-1.5 rounded-full cursor-pointer transition-colors shadow-lg shadow-purple-500/20">
+                  <i className="fas fa-upload"></i>
+                  <span>{project.audioUrl ? "重新上傳音樂" : "上傳音樂"}</span>
+                  <input type="file" accept="audio/*" className="hidden" onChange={handleFileUpload} />
+                </label>
+              </div>
+            </header>
+
+            <main className="flex-1 relative bg-neutral-950 p-6 flex flex-col">
+               <div 
+                 ref={stageRef}
+                 className="flex-1 w-full max-w-5xl mx-auto border-2 border-neutral-800 rounded-2xl bg-neutral-900 relative shadow-2xl overflow-hidden"
+                 style={{ 
+                   backgroundImage: snapToGrid ? 'linear-gradient(to right, #404040 1px, transparent 1px), linear-gradient(to bottom, #404040 1px, transparent 1px)' : 'none',
+                   backgroundSize: '5% 5%' 
+                 }}
+               >
+                 <div className="absolute top-1/2 left-1/2 w-4 h-4 -translate-x-1/2 -translate-y-1/2 border-2 border-red-500/30 rounded-full"></div>
+                 <div className="absolute top-0 bottom-0 left-1/2 w-px bg-red-500/20"></div>
+                 <div className="absolute left-0 right-0 top-1/2 h-px bg-red-500/20"></div>
+                 <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-neutral-600 font-bold tracking-[0.5em] uppercase text-sm">Front</div>
+
+                 {activeFormation && Array.from({ length: project.dancerCount }).map((_, i) => {
+                   const pos = activeFormation.positions[i] || { x: 50, y: 50 };
+                   return (
+                     <div
+                       key={i}
+                       onPointerDown={(e) => handleDancerDragStart(i, e)}
+                       className={`absolute w-10 h-10 -ml-5 -mt-5 rounded-full shadow-lg border-2 border-white/20 flex items-center justify-center font-bold cursor-grab active:cursor-grabbing hover:scale-110 transition-transform ${DANCER_COLORS[i % DANCER_COLORS.length]}`}
+                       style={{ left: `${pos.x}%`, top: `${pos.y}%`, transition: isPlaying ? 'left 0.1s linear, top 0.1s linear' : 'none' }}
+                     >
+                       {i + 1}
+                     </div>
+                   );
+                 })}
+               </div>
+            </main>
+
+            <footer className="h-64 bg-neutral-900 border-t border-neutral-800 flex flex-col shrink-0">
+              <div className="flex items-center justify-between px-6 py-3 border-b border-neutral-800">
+                <div className="flex items-center gap-4">
+                  <button onClick={togglePlay} className="w-12 h-12 bg-white text-black rounded-full flex items-center justify-center hover:scale-105 transition-transform shadow-lg shadow-white/10">
+                    <i className={`fas fa-${isPlaying ? 'pause' : 'play'} ${!isPlaying && 'ml-1'} text-xl`}></i>
+                  </button>
+                  <div className="text-2xl font-mono tracking-wider font-light text-purple-400 w-24">{formatTime(currentTime)}</div>
+                  <div className="text-neutral-500 text-sm">/ {formatTime(duration)}</div>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 bg-neutral-800 px-3 py-1.5 rounded-lg text-sm border border-neutral-700">
+                    <i className="fas fa-music text-neutral-400"></i>
+                    <span className="text-neutral-400">BPM:</span>
+                    <input 
+                      type="number" value={project.bpm} 
+                      onChange={e => updateProject({bpm: parseInt(e.target.value) || 120})}
+                      className="w-12 bg-transparent text-white focus:outline-none"
+                    />
+                  </div>
+                  <button onClick={addSection} className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 rounded-lg text-sm flex items-center gap-2 border border-neutral-700">
+                    <i className="fas fa-align-justify"></i> 標記段落
+                  </button>
+                  <button onClick={addKeyframe} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm flex items-center gap-2 shadow-lg shadow-indigo-500/20">
+                    <i className="fas fa-map-marker-alt"></i> 記錄隊形
+                  </button>
+                </div>
               </div>
 
-              {/* BPM 網格線 */}
-              {project.bpm > 0 && duration > 0 && (
-                <div className="absolute inset-0 pointer-events-none opacity-10">
-                  {Array.from({ length: Math.floor(duration / (60 / project.bpm)) }).map((_, i) => (
-                    <div 
-                      key={i} 
-                      className="absolute top-0 bottom-0 w-px bg-white"
-                      style={{ left: `${((i * (60 / project.bpm)) / duration) * 100}%` }}
+              <div className="flex-1 relative px-6 py-4 flex flex-col select-none overflow-hidden">
+                <div className="h-6 relative mb-2">
+                  {project.sections.map((sec, idx) => {
+                    const nextSec = project.sections[idx + 1];
+                    const endTime = nextSec ? nextSec.time : duration;
+                    const left = (sec.time / (duration || 1)) * 100;
+                    const width = ((endTime - sec.time) / (duration || 1)) * 100;
+                    return (
+                      <div key={sec.id} className={`absolute top-0 h-full ${sec.color} rounded-sm px-2 flex items-center text-xs font-bold text-black/80 truncate border border-black/20`} style={{ left: `${left}%`, width: `${width}%` }}>
+                        {sec.name}
+                        <button onClick={(e) => { e.stopPropagation(); updateProject({ sections: project.sections.filter(s => s.id !== sec.id) }); }} className="ml-auto opacity-50 hover:opacity-100">
+                          <i className="fas fa-trash text-[10px]"></i>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="flex-1 bg-neutral-950 rounded-xl relative cursor-pointer group border border-neutral-800 overflow-hidden" onClick={handleTimelineClick}>
+                  <div className="absolute inset-0 opacity-20" style={{ backgroundImage: 'linear-gradient(90deg, #333 1px, transparent 1px)', backgroundSize: '20px 100%' }}></div>
+                  {project.bpm > 0 && duration > 0 && (
+                    <div className="absolute inset-0 pointer-events-none opacity-10">
+                      {Array.from({ length: Math.floor(duration / (60 / project.bpm)) }).map((_, i) => (
+                        <div key={i} className="absolute top-0 bottom-0 w-px bg-white" style={{ left: `${((i * (60 / project.bpm)) / duration) * 100}%` }} />
+                      ))}
+                    </div>
+                  )}
+                  <div className="absolute top-0 bottom-0 left-0 bg-purple-500/20 border-r-2 border-purple-500 shadow-[0_0_15px_rgba(168,85,247,0.5)] pointer-events-none z-10" style={{ width: `${(currentTime / (duration || 1)) * 100}%` }}></div>
+                  {project.formations.map((f, i) => (
+                    <div
+                      key={f.id}
+                      className={`absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 transform -translate-x-1/2 cursor-pointer z-20 transition-all ${activeFormation?.id === f.id ? 'bg-white border-purple-500 scale-150' : 'bg-neutral-600 border-neutral-400'}`}
+                      style={{ left: `${(f.time / (duration || 1)) * 100}%` }}
+                      onClick={(e) => { e.stopPropagation(); setCurrentTime(f.time); if (audioRef.current) audioRef.current.currentTime = f.time; }}
+                      onDoubleClick={(e) => { e.stopPropagation(); deleteKeyframe(f.id); }}
+                      title={`隊形 ${i + 1}`}
                     />
                   ))}
                 </div>
-              )}
-
-              {/* 播放進度條 */}
-              <div 
-                className="absolute top-0 bottom-0 left-0 bg-purple-500/20 border-r-2 border-purple-500 shadow-[0_0_15px_rgba(168,85,247,0.5)] pointer-events-none z-10"
-                style={{ width: `${(currentTime / (duration || 1)) * 100}%` }}
-              >
+                <div className="text-xs text-neutral-500 mt-2 flex justify-between">
+                  <span>雙擊時間軸上的點可刪除隊形</span><span>提示：在舞台上直接拖曳舞者會自動建立新隊形</span>
+                </div>
               </div>
-
-              {/* 隊形關鍵幀 (Keyframes) */}
-              {project.formations.map((f, i) => (
-                <div
-                  key={f.id}
-                  className={`absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 transform -translate-x-1/2 cursor-pointer z-20 transition-all ${
-                    activeFormation?.id === f.id ? 'bg-white border-purple-500 scale-150 shadow-[0_0_10px_rgba(255,255,255,0.8)]' : 'bg-neutral-600 border-neutral-400 hover:bg-neutral-400'
-                  }`}
-                  style={{ left: `${(f.time / (duration || 1)) * 100}%` }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setCurrentTime(f.time);
-                    if (audioRef.current) audioRef.current.currentTime = f.time;
-                  }}
-                  onDoubleClick={(e) => {
-                    e.stopPropagation();
-                    deleteKeyframe(f.id);
-                  }}
-                  title={`隊形 ${i + 1} (${formatTime(f.time)})\n雙擊刪除`}
-                />
-              ))}
-            </div>
-            
-            <div className="text-xs text-neutral-500 mt-2 flex justify-between">
-              <span>雙擊關鍵幀可刪除</span>
-              <span>提示：在舞台上直接拖曳舞者會自動在當前時間建立新隊形</span>
-            </div>
-
+            </footer>
           </div>
-        </footer>
-      </div>
-    </div>
-  );
-}
+        </div>
+      );
+    }
+
+    // 啟動 React 應用程式
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
