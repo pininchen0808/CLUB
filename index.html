@@ -197,7 +197,7 @@
         const name = prompt("請輸入新專案名稱：");
         if (name) {
           const newProj = createNewProject(name);
-          setProjects([...projects, newProj]);
+          setProjects(prev => [...prev, newProj]);
           setCurrentProjectId(newProj.id);
           setCurrentTime(0);
           setIsPlaying(false);
@@ -206,8 +206,9 @@
         }
       };
 
+      // 修正：使用安全的函數式更新，避免拖曳時資料舊換新卡住
       const updateProject = (updates) => {
-        setProjects(projects.map(p => p.id === currentProjectId ? { ...p, ...updates } : p));
+        setProjects(prevProjects => prevProjects.map(p => p.id === currentProjectId ? { ...p, ...updates } : p));
       };
 
       const getCurrentFormation = () => {
@@ -226,26 +227,39 @@
 
       const activeFormation = getCurrentFormation();
 
+      // 修正：重寫拖曳引擎，同時完美支援滑鼠與觸控
       const handleDancerDragStart = (dancerId, e) => {
         if (!stageRef.current || !activeFormation) return;
         
         e.stopPropagation();
 
-        let targetFormation = activeFormation;
-        if (Math.abs(targetFormation.time - currentTime) > 0.5) {
-            targetFormation = {
-                id: generateId(),
+        let targetFormationId = activeFormation.id;
+        
+        // 如果目前時間沒有關鍵幀，自動建立一個
+        if (Math.abs(activeFormation.time - currentTime) > 0.5) {
+            targetFormationId = generateId();
+            const newFormation = {
+                id: targetFormationId,
                 time: currentTime,
                 positions: { ...activeFormation.positions }
             };
-            updateProject({ formations: [...project.formations, targetFormation] });
+            setProjects(prevProjects => prevProjects.map(p => {
+                if (p.id === currentProjectId) {
+                    return { ...p, formations: [...p.formations, newFormation] };
+                }
+                return p;
+            }));
         }
 
         const stageRect = stageRef.current.getBoundingClientRect();
         
-        const onPointerMove = (moveEvent) => {
-          let newX = ((moveEvent.clientX - stageRect.left) / stageRect.width) * 100;
-          let newY = ((moveEvent.clientY - stageRect.top) / stageRect.height) * 100;
+        const onMove = (moveEvent) => {
+          // 支援觸控與滑鼠事件
+          const clientX = moveEvent.touches ? moveEvent.touches[0].clientX : moveEvent.clientX;
+          const clientY = moveEvent.touches ? moveEvent.touches[0].clientY : moveEvent.clientY;
+          
+          let newX = ((clientX - stageRect.left) / stageRect.width) * 100;
+          let newY = ((clientY - stageRect.top) / stageRect.height) * 100;
           
           if (snapToGrid) {
             const snapSize = 5;
@@ -256,29 +270,35 @@
           newX = Math.max(0, Math.min(100, newX));
           newY = Math.max(0, Math.min(100, newY));
 
-          const updatedFormations = project.formations.map(f => {
-            if (f.id === targetFormation.id) {
+          // 確保拖拉過程中的資料同步更新，不卡頓
+          setProjects(prevProjects => prevProjects.map(p => {
+            if (p.id === currentProjectId) {
               return {
-                ...f,
-                positions: {
-                  ...f.positions,
-                  [dancerId]: { x: newX, y: newY }
-                }
+                ...p,
+                formations: p.formations.map(f => f.id === targetFormationId ? {
+                  ...f,
+                  positions: {
+                    ...f.positions,
+                    [dancerId]: { x: newX, y: newY }
+                  }
+                } : f)
               };
             }
-            return f;
-          });
-          
-          updateProject({ formations: updatedFormations });
+            return p;
+          }));
         };
 
-        const onPointerUp = () => {
-          document.removeEventListener('pointermove', onPointerMove);
-          document.removeEventListener('pointerup', onPointerUp);
+        const onUp = () => {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          document.removeEventListener('touchmove', onMove);
+          document.removeEventListener('touchend', onUp);
         };
 
-        document.addEventListener('pointermove', onPointerMove);
-        document.addEventListener('pointerup', onPointerUp);
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+        document.addEventListener('touchmove', onMove, { passive: false });
+        document.addEventListener('touchend', onUp);
       };
 
       const handleFileUpload = (e) => {
@@ -509,7 +529,8 @@
                    return (
                      <div
                        key={i}
-                       onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); handleDancerDragStart(i, e); }}
+                       onMouseDown={(e) => handleDancerDragStart(i, e)}
+                       onTouchStart={(e) => handleDancerDragStart(i, e)}
                        className={`absolute w-auto min-w-[2rem] sm:min-w-[2.5rem] h-8 sm:h-10 px-1 sm:px-2 -translate-x-1/2 -translate-y-1/2 rounded-full shadow-lg border-2 border-white/20 flex items-center justify-center font-bold text-xs sm:text-base cursor-grab active:cursor-grabbing hover:scale-110 transition-transform ${DANCER_COLORS[i % DANCER_COLORS.length]}`}
                        style={{ left: `${pos.x}%`, top: `${pos.y}%`, transition: isPlaying ? 'left 0.1s linear, top 0.1s linear' : 'none', whiteSpace: 'nowrap' }}
                        title={`舞者 ${displayName}`}
